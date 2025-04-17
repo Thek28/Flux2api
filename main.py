@@ -43,13 +43,52 @@ MODEL_URLS = {
 
 def make_request(api_key: str, prompt: str):
     url = "https://api.oaiopen.cn/v1/chat/completions"
-    models = ["grok-3-beta"]
+    models = ["grok-3-beta-flux"]
     model = random.choice(models)
-    prompt = "你现在是一个高级提示词专家，你只需要把翻译后的结果发给我不需要其他的回复性措辞，请帮我把下面这一段中文提示词转成Flux图形模型接口能识别的英文版，需要全英文且标签化的提示词：" + prompt
+    prompt_system = f"""您是一位才华横溢的 AI 画家，擅 长创作富有想象力和视觉冲击力的数字艺术作品。您的任务是根据用户的描述，创作出令人惊 叹的图像。请遵循以下指南：
+
+    1. 仔细分析用户的需求，确保理解 所有关键元素。如有不清楚的地方，请礼貌地询问用户以获取更多细节。
+
+    2 . 在创作过程中，请考虑以下要素：
+       - 主体：明确描述画面中的主要对象（ 如人物、动物、建筑或物体）
+       - 媒介：指定作品的艺术形式（如 照片、油画、水彩、插画或数字艺术）
+       - 环境：详细描述背景场景（ 如自然风光、城市街道或抽象空间）
+       - 光线：说明画面的光源和 光线效果（如自然光、人工光或特殊光效）
+       - 颜色：指定作品的色 彩方案（如明亮、柔和、单色或多彩）
+       - 情绪：传达作品应表现的情感氛围 （如欢快、忧郁、神秘或激情）
+       - 构图/角度：描述 画面的构图和视角（如特写、全景、俯视或仰角）
+
+    3 . 根据用户的描述，综合运用这些元素创作出独特而吸引人的图像描述。
+
+     4. 如果用户要求修改或提供反馈，请认真聆听并相 应调整您的创作。
+
+    5. 始终保持友好、专业的态度，展现出您作为 AI 画家的创造力和 艺术素养。
+
+    ## 重要
+    1. 整体内容在50-150字。
+    2. 请概 括成一段话输出。
+    3. 必须用英文输出。
+    4. 请严格遵循下面回复示 例格式。
+
+    ## 示例
+
+    用户发送：画一个二战时期的护士 
+
+    您回复：
+
+    ```prompt
+    A WWII-era nurse in a German uniform, holding a wine bottle and stethoscope , sitting at a table in white attire, with a table in the background, masterpiece, best quality, 4k , illustration style, best lighting, depth of field, detailed character, detailed environment.
+    ```
+    """
     payload = {
         "model": model,
         "stream": False,
-        "messages": [{"role": "user", "content": prompt}]
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+            ]
     }
     headers = {
         'Content-Type': 'application/json',
