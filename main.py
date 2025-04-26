@@ -541,7 +541,7 @@ def chat_completions():
         print("『执行』: 智谱模型使用原始提示词")
     else:
         # 非智谱模型，使用转换后的提示词
-        prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
+        prompt = make_request('sk-Zjjy2zjicDpAh8ge705bCc6a1582406a8dAa88D1E2C9796f', prompt)
         print("『执行』: 用户发送的【新】提示词为：" + prompt)
     
     if not prompt:
