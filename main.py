@@ -6,6 +6,11 @@ import os
 import re  # Import the 're' module
 import math
 import random
+try:
+    from zhipuai import ZhipuAI
+except ImportError:
+    print("警告：zhipuai 库未安装，智谱文生图功能将不可用。请使用 pip install zhipuai 安装。")
+    ZhipuAI = None
 
 app = Flask(__name__)
 
@@ -14,8 +19,10 @@ HTTP_PROXY = os.environ.get("HTTP_PROXY", "")
 HTTPS_PROXY = os.environ.get("HTTPS_PROXY", "")
 API_KEY = os.environ.get("API_KEY", "")
 FAL_API_KEY = os.environ.get("FAL_API_KEY", "8aca507c-281a-4a27-a716-853bbab6ed71:3f0f85fb85d4f0129c84ef61d060dbe6")
+GML_API_KEY = os.environ.get("GML_API_KEY", "0e78255708974e158a8369212f0092b9.YojuGtv40BRAik8S")  # 从环境变量获取智谱API密钥
 
 FAL_API_KEY_LIST = FAL_API_KEY.split(",") if FAL_API_KEY else []
+GML_API_KEY_LIST = GML_API_KEY.split(",") if GML_API_KEY else []  # 支持多个API KEY轮询
 
 # Restructured MODEL_URLS to separate submit and status/result URLs
 MODEL_URLS = {
@@ -38,6 +45,10 @@ MODEL_URLS = {
     "flux-dev": {
         "submit_url": "https://queue.fal.run/fal-ai/flux/dev",
         "status_base_url": "https://queue.fal.run/fal-ai/flux"
+    },
+    "cogview-4-250304": {
+        "provider": "zhipuai",  # 标记为智谱提供商
+        "model": "cogview-4-250304"  # 智谱模型名称
     }
 }
 
@@ -116,12 +127,16 @@ def get_fal_api_key():
         return random.choice(FAL_API_KEY_LIST)
     raise ValueError("FAL_API_KEY is not set.")
 
+def get_gml_api_key():
+    # 随机获取 GML_API_KEY_LIST
+    if GML_API_KEY_LIST:
+        return random.choice(GML_API_KEY_LIST)
+    raise ValueError("GML_API_KEY is not set.")
 
 def validate_api_key(api_key):
     if API_KEY and API_KEY != api_key:
         return False
     return True
-
 
 def get_proxies():
     """获取代理配置"""
@@ -134,7 +149,6 @@ def get_proxies():
 
     print(f"Using proxies: {proxies}")
     return proxies if proxies else None
-
 
 def call_fal_api(prompt, model, options=None):
     """
@@ -371,11 +385,110 @@ def call_fal_api(prompt, model, options=None):
 
     return image_urls
 
+def call_gml_api(prompt, model, options=None):
+    """
+    调用智谱API生成图像
+    
+    Args:
+        prompt: 用于生成图像的文本提示
+        model: 使用的模型名称
+        options: 附加选项，如num_images等
+        
+    Returns:
+        成功时返回图像URL列表，失败时抛出异常
+    """
+    if ZhipuAI is None:
+        raise ValueError("智谱AI SDK未安装，请使用pip install zhipuai安装")
+    
+    if options is None:
+        options = {}
+    
+    # 准备基本请求参数
+    num_images = options.get("num_images", 1)
+    max_retries = 3
+    retry_count = 0
+    image_urls = []
+    
+    while retry_count <= max_retries:
+        try:
+            # 获取API密钥
+            gml_api_key = get_gml_api_key()
+            print(f"Attempt {retry_count + 1}/{max_retries + 1} - Using ZhipuAI key: {gml_api_key[:5]}...{gml_api_key[-5:] if len(gml_api_key) > 10 else ''}")
+            
+            # 调用智谱API
+            client = ZhipuAI(api_key=gml_api_key)
+            response = client.images.generations(
+                model=model,
+                prompt=prompt,
+                n=num_images  # 生成图片数量
+            )
+            
+            # 处理响应
+            if hasattr(response, 'data') and response.data:
+                for item in response.data:
+                    if hasattr(item, 'url') and item.url:
+                        image_urls.append(item.url)
+                        print(f"Found ZhipuAI image URL: {item.url}")
+            
+            if image_urls:
+                break
+                
+        except Exception as e:
+            error_message = str(e)
+            print(f"ZhipuAI API error: {error_message}")
+            
+            # 处理认证错误
+            if "api_key" in error_message.lower() or "unauthorized" in error_message.lower():
+                if retry_count < max_retries:
+                    retry_count += 1
+                    print(f"ZhipuAI API key认证失败，尝试使用新的API key重试 ({retry_count}/{max_retries})")
+                    time.sleep(2 ** retry_count)
+                    continue
+                else:
+                    raise ValueError(f"Authentication error with ZhipuAI API after {max_retries} retries: {error_message}")
+            
+            # 处理其他错误
+            if retry_count < max_retries:
+                retry_count += 1
+                print(f"ZhipuAI API错误，进行重试 ({retry_count}/{max_retries}): {error_message}")
+                time.sleep(2 ** retry_count)
+                continue
+            
+            raise ValueError(f"Error calling ZhipuAI API: {error_message}")
+    
+    if not image_urls:
+        raise ValueError("No images found from ZhipuAI API after multiple attempts")
+    
+    return image_urls
+
+def call_model_api(prompt, model, options=None):
+    """
+    统一的API调用入口，根据模型类型分发到不同的API调用函数
+    
+    Args:
+        prompt: 用于生成图像的文本提示
+        model: 使用的模型名称
+        options: 附加选项
+        
+    Returns:
+        成功时返回图像URL列表，失败时抛出异常
+    """
+    # 获取模型信息
+    model_info = MODEL_URLS.get(model)
+    if not model_info:
+        raise ValueError(f"Unsupported model: {model}")
+    
+    # 根据提供商分发到不同的API调用函数
+    provider = model_info.get("provider")
+    if provider == "zhipuai":
+        return call_gml_api(prompt, model_info.get("model"), options)
+    else:
+        return call_fal_api(prompt, model, options)
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     """
-    处理聊天完成请求，路由到不同的Fal模型。
+    处理聊天完成请求，路由到不同的模型。
     支持流式输出和标准响应格式。
     """
     auth_header = request.headers.get('Authorization', '')
@@ -416,9 +529,17 @@ def chat_completions():
     last_user_message = next((msg['content'] for msg in reversed(messages) if msg.get('role') == 'user'), None)
     if last_user_message:
         prompt = last_user_message
+    
     print("『执行』: 用户发送的【原】提示词为：" + prompt)
-    prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
-    print("『执行』: 用户发送的【新】提示词为：" + prompt)
+    
+    # 针对智谱AI模型处理 - 直接使用原始提示词而不做转换
+    if model == "cogview-4-250304":
+        print("『执行』: 智谱模型使用原始提示词")
+    else:
+        # 非智谱模型，使用转换后的提示词
+        prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
+        print("『执行』: 用户发送的【新】提示词为：" + prompt)
+    
     if not prompt:
         # 如果没有提示词，返回默认响应
         if stream:
@@ -506,8 +627,8 @@ def chat_completions():
             return jsonify(completions_response)
 
     try:
-        # 调用Fal API
-        image_urls = call_fal_api(prompt, model)
+        # 调用API生成图像 - 使用统一入口
+        image_urls = call_model_api(prompt, model)
 
         # 构建响应内容
         content = ""
@@ -700,7 +821,6 @@ def chat_completions():
         print(f"Exception: {str(e)}")
         return jsonify({"error": {"message": f"Server error: {str(e)}", "type": "server_error"}}), 500
 
-
 @app.route('/v1/images/generations', methods=['POST'])
 def generate_image():
     """Legacy endpoint for direct image generations."""
@@ -741,18 +861,35 @@ def generate_image():
     size = openai_request.get('size', '1080x1920')
     seed = openai_request.get('seed', openai_request.get('user', 100010))
     output_format = openai_request.get('response_format', 'jpeg')
+    num_images = openai_request.get('n', 1)  # 添加支持生成多张图片
+    
+    # 打印原始提示词
+    print("『执行』: 图像生成原始提示词：" + prompt)
+    
+    # 针对非智谱AI模型，转换提示词
+    if model != "cogview-4-250304":
+        try:
+            # 尝试转换提示词
+            converted_prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
+            if converted_prompt:
+                prompt = converted_prompt
+                print("『执行』: 图像生成转换后提示词：" + prompt)
+        except Exception as e:
+            print(f"『执行』: 提示词转换失败: {str(e)}")
+    else:
+        print("『执行』: 智谱模型使用原始提示词")
 
     # 准备选项参数
     options = {
         "size": size,
         "seed": seed,
         "output_format": output_format,
-        "num_images": 1
+        "num_images": num_images
     }
 
     try:
-        # 调用Fal API
-        image_urls = call_fal_api(prompt, model, options)
+        # 使用统一的API调用入口
+        image_urls = call_model_api(prompt, model, options)
 
         # 构建OpenAI格式的响应
         data = [{"url": url} for url in image_urls]
@@ -768,7 +905,7 @@ def generate_image():
         error_message = str(e)
 
         # 检查是否是认证错误
-        if "Authentication error" in error_message:
+        if "Authentication error" in error_message or "api_key" in error_message.lower() or "unauthorized" in error_message.lower():
             return jsonify({
                 "error": {
                     "message": error_message,
@@ -781,7 +918,7 @@ def generate_image():
         return jsonify({
             "error": {
                 "message": error_message,
-                "type": "fal_api_error",
+                "type": "api_error",
                 "code": 500
             }
         }), 500
@@ -790,7 +927,6 @@ def generate_image():
         # 处理未知错误
         print(f"Exception: {str(e)}")
         return jsonify({"error": {"message": f"Server error: {str(e)}", "type": "server_error"}}), 500
-
 
 @app.route('/v1/models', methods=['GET'])
 def list_models():
@@ -805,19 +941,39 @@ def list_models():
         {"id": "flux-1.1-pro", "object": "model", "created": 1698785189,
          "owned_by": "fal-openai-adapter", "permission": [], "root": "flux-1.1-pro", "parent": None},
         {"id": "ideogram-v2", "object": "model", "created": 1698785189,
-         "owned_by": "fal-openai-adapter", "permission": [], "root": "ideogram-v2", "parent": None}
+         "owned_by": "fal-openai-adapter", "permission": [], "root": "ideogram-v2", "parent": None},
+        {"id": "cogview-4-250304", "object": "model", "created": 1698785189,
+         "owned_by": "zhipuai-adapter", "permission": [], "root": "cogview-4-250304", "parent": None}
     ]
     return jsonify({"object": "list", "data": models})
 
 
 if __name__ == "__main__":
+    # 检查环境变量
+    missing_keys = []
     if not FAL_API_KEY:
-        print("Warning: FAL_API_KEY is not set. Some features may not work.")
-        raise ValueError("FAL_API_KEY is not set.")
+        print("警告: FAL_API_KEY 未设置。部分功能可能不可用。")
+        missing_keys.append("FAL_API_KEY")
+    
+    if not GML_API_KEY and ZhipuAI is not None:
+        print("警告: GML_API_KEY 未设置。智谱文生图功能将不可用。")
+        missing_keys.append("GML_API_KEY")
+    
+    if missing_keys:
+        print(f"缺少以下环境变量: {', '.join(missing_keys)}")
+        if "FAL_API_KEY" in missing_keys:
+            raise ValueError("FAL_API_KEY is not set.")
 
     port = int(os.environ.get("PORT", 5005))
-    print(f"Starting server on port {port}...")
+    print(f"服务启动于端口 {port}...")
     if HTTP_PROXY or HTTPS_PROXY:
-        print(f"HTTP Proxy: {HTTP_PROXY}")
-        print(f"HTTPS Proxy: {HTTPS_PROXY}")
+        print(f"HTTP代理: {HTTP_PROXY}")
+        print(f"HTTPS代理: {HTTPS_PROXY}")
+    
+    # 打印可用的图像生成模型
+    print("可用的图像生成模型:")
+    for model_name, model_info in MODEL_URLS.items():
+        provider = model_info.get("provider", "fal-ai")
+        print(f"  - {model_name} (提供商: {provider})")
+    
     app.run(host='0.0.0.0', port=port, debug=True)
