@@ -473,6 +473,10 @@ def call_model_api(prompt, model, options=None):
     Returns:
         成功时返回图像URL列表，失败时抛出异常
     """
+    # 将模型名称转换为小写
+    model = model.lower()
+    print("『执行』: 当前使用模型为：" + model)
+    
     # 获取模型信息
     model_info = MODEL_URLS.get(model)
     if not model_info:
