@@ -521,7 +521,7 @@ def call_model_api(prompt, model, options=None):
 
 def create_stream_chunks(model: str, content: str, include_usage: bool = False, prompt: str = ""):
     """
-    创建流式响应的数据块，使用OpenAI标准的流式格式
+    创建流式响应的数据块，返回完整的OpenAI格式响应
     
     Args:
         model: 模型名称
@@ -539,56 +539,31 @@ def create_stream_chunks(model: str, content: str, include_usage: bool = False, 
         "total_tokens": (len(prompt) // 4 if prompt else 0) + (len(content) // 4)
     }
     
-    # 发送角色
-    yield f"data: {json.dumps({
-        'id': request_id,
-        'object': 'chat.completion.chunk',
-        'created': current_time,
-        'model': model,
-        'choices': [{
-            'index': 0,
-            'delta': {
-                'role': 'assistant'
-            },
-            'finish_reason': None
-        }]
-    })}\n\n"
-    
-    # 发送内容
-    response_with_content = {
-        'id': request_id,
-        'object': 'chat.completion.chunk',
-        'created': current_time,
-        'model': model,
-        'choices': [{
-            'index': 0,
-            'delta': {
-                'content': content
-            },
-            'finish_reason': None
-        }]
+    # 构建完整的响应
+    complete_response = {
+        "id": request_id,
+        "object": "chat.completion",
+        "created": current_time,
+        "model": model,
+        "system_fingerprint": f"fp_{current_time}",
+        "choices": [
+            {
+                "index": 0,
+                "logprobs": None,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": content
+                }
+            }
+        ]
     }
     
-    # 如果需要包含使用量信息，添加到内容块中
     if include_usage:
-        response_with_content['choices'][0]['delta']['usage'] = usage
-        
-    yield f"data: {json.dumps(response_with_content)}\n\n"
+        complete_response["usage"] = usage
     
-    # 发送完成标记
-    yield f"data: {json.dumps({
-        'id': request_id,
-        'object': 'chat.completion.chunk',
-        'created': current_time,
-        'model': model,
-        'choices': [{
-            'index': 0,
-            'delta': {},
-            'finish_reason': 'stop'
-        }]
-    })}\n\n"
-    
-    yield "data: [DONE]\n\n"
+    # 只发送一次完整的响应
+    yield f"{json.dumps(complete_response)}\n\n"
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
