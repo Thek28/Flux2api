@@ -18,7 +18,7 @@ app = Flask(__name__)
 HTTP_PROXY = os.environ.get("HTTP_PROXY", "")
 HTTPS_PROXY = os.environ.get("HTTPS_PROXY", "")
 API_KEY = os.environ.get("API_KEY", "")
-FAL_API_KEY = os.environ.get("FAL_API_KEY", "8aca507c-281a-4a27-a716-853bbab6ed71:3f0f85fb85d4f0129c84ef61d060dbe6")
+FAL_API_KEY = os.environ.get("FAL_API_KEY", "cee71284-f412-491a-86ff-ac5ff7097eb2:8f67a08677825cf33330a214d6a681ee")
 GML_API_KEY = os.environ.get("GML_API_KEY", "0e78255708974e158a8369212f0092b9.YojuGtv40BRAik8S")  # 从环境变量获取智谱API密钥
 
 FAL_API_KEY_LIST = FAL_API_KEY.split(",") if FAL_API_KEY else []
@@ -46,6 +46,10 @@ MODEL_URLS = {
         "submit_url": "https://queue.fal.run/fal-ai/flux/dev",
         "status_base_url": "https://queue.fal.run/fal-ai/flux"
     },
+    "kontext": {
+        "submit_url": "https://queue.fal.run/fal-ai/flux-pro/kontext",
+        "status_base_url": "https://queue.fal.run/fal-ai/flux-pro"
+    },
     "cogview-4-250304": {
         "provider": "zhipuai",  # 标记为智谱提供商
         "model": "cogview-4-250304"  # 智谱模型名称
@@ -56,41 +60,6 @@ def make_request(api_key: str, prompt: str):
     url = "https://api.oaiopen.cn/v1/chat/completions"
     models = ["grok-3-beta-flux"]
     model = random.choice(models)
-    prompt_system = f"""您是一位才华横溢的 AI 画家，擅 长创作富有想象力和视觉冲击力的数字艺术作品。您的任务是根据用户的描述，创作出令人惊 叹的图像。请遵循以下指南：
-
-    1. 仔细分析用户的需求，确保理解 所有关键元素。如有不清楚的地方，请礼貌地询问用户以获取更多细节。
-
-    2 . 在创作过程中，请考虑以下要素：
-       - 主体：明确描述画面中的主要对象（ 如人物、动物、建筑或物体）
-       - 媒介：指定作品的艺术形式（如 照片、油画、水彩、插画或数字艺术）
-       - 环境：详细描述背景场景（ 如自然风光、城市街道或抽象空间）
-       - 光线：说明画面的光源和 光线效果（如自然光、人工光或特殊光效）
-       - 颜色：指定作品的色 彩方案（如明亮、柔和、单色或多彩）
-       - 情绪：传达作品应表现的情感氛围 （如欢快、忧郁、神秘或激情）
-       - 构图/角度：描述 画面的构图和视角（如特写、全景、俯视或仰角）
-
-    3 . 根据用户的描述，综合运用这些元素创作出独特而吸引人的图像描述。
-
-     4. 如果用户要求修改或提供反馈，请认真聆听并相 应调整您的创作。
-
-    5. 始终保持友好、专业的态度，展现出您作为 AI 画家的创造力和 艺术素养。
-
-    ## 重要
-    1. 整体内容在50-150字。
-    2. 请概 括成一段话输出。
-    3. 必须用英文输出。
-    4. 请严格遵循下面回复示 例格式。
-
-    ## 示例
-
-    用户发送：画一个二战时期的护士 
-
-    您回复：
-
-    ```prompt
-    A WWII-era nurse in a German uniform, holding a wine bottle and stethoscope , sitting at a table in white attire, with a table in the background, masterpiece, best quality, 4k , illustration style, best lighting, depth of field, detailed character, detailed environment.
-    ```
-    """
     payload = {
         "model": model,
         "stream": False,
@@ -101,6 +70,7 @@ def make_request(api_key: str, prompt: str):
             }
             ]
     }
+    print(f"『执行』: 获取到Flux payload：{payload}")
     headers = {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + api_key
@@ -109,6 +79,42 @@ def make_request(api_key: str, prompt: str):
     try:
         response = requests.post(url, headers=headers, json=payload)
         response_text = response.text
+        parsed_json_data = json.loads(response_text)
+        # 提取 content 的值
+        content = parsed_json_data['choices'][0]['message']['content']
+        print(f"『执行』: 获取到Flux专业的提示词：{content}")
+        return content
+    except json.JSONDecodeError:
+        print(f"『执行』: 获取到Flux专业的提示词-从响应解码JSON时出错: {response_text}")
+        return None
+    except Exception as e:
+        print(f"『执行』: 获取到Flux专业的提示词-请求失败: {e}")
+        return None
+#kontext模型只翻译提示词不做扩展
+def make_request2(api_key: str, prompt: str):
+    url = "https://api.oaiopen.cn/v1/chat/completions"
+    models = ["grok-3-beta-kontext"]
+    model = random.choice(models)
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+            ]
+    }
+    print(f"『执行』: 获取到Flux payload：{payload}")
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + api_key
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response_text = response.text
+        print(f"『执行』: 获取到Flux response_text:{response_text}")
         parsed_json_data = json.loads(response_text)
         # 提取 content 的值
         content = parsed_json_data['choices'][0]['message']['content']
@@ -164,18 +170,42 @@ def call_fal_api(prompt, model, options=None):
     """
     if options is None:
         options = {}
-
+        
     # 准备基本请求参数
     fal_request = {
         "prompt": prompt,
         "num_images": options.get("num_images", 1)
     }
+    
+    # 如果是kontext模型，添加默认参数
+    if model == "kontext":
+        fal_request["guidance_scale"] = options.get("guidance_scale", 3.5)
+        fal_request["safety_tolerance"] = options.get("safety_tolerance", "2")
+        fal_request["output_format"] = options.get("output_format", "jpeg")
+        
+        # 添加image_url，优先使用用户提供的
+        if "image_url" in options:
+            fal_request["image_url"] = options["image_url"]
+            print(f"『执行』: 使用用户提供的image_url: {options['image_url']}")
+        else:
+            # 如果用户没有提供，使用默认值
+            fal_request["image_url"] = "http://ai.oaiopen.cn/api/draw/proxy/dd/aHR0cDovL2FpLm9haW9wZW4uY24vZmlsZS9kcmF3L2ZsdXgvZjFjNWUzM2ViZGZmMTZiNDA4MTJiYmVlZDBiMTg0ODYucG5n.png"
+            print("『执行』: 使用默认image_url")
 
     # 添加其他可选参数
     if "seed" in options:
         fal_request["seed"] = options["seed"]
     if "output_format" in options:
         fal_request["output_format"] = options["output_format"]
+    
+    # 处理图生图模型的特殊参数 - 添加kontext模型的支持
+    if model == "kontext" and "image_url" in options:
+        fal_request["image_url"] = options["image_url"]
+        # 添加其他kontext特有参数
+        if "guidance_scale" in options:
+            fal_request["guidance_scale"] = options["guidance_scale"]
+        if "safety_tolerance" in options:
+            fal_request["safety_tolerance"] = options["safety_tolerance"]
 
     # 处理图像尺寸或宽高比
     if "size" in options:
@@ -532,19 +562,130 @@ def chat_completions():
     prompt = ""
     last_user_message = next((msg['content'] for msg in reversed(messages) if msg.get('role') == 'user'), None)
     if last_user_message:
-        prompt = last_user_message
+        # 检查content是否为数组格式（新的视觉模型格式）
+        if isinstance(last_user_message, list):
+            # 新格式：content是数组，包含text和image_url对象
+            for item in last_user_message:
+                if isinstance(item, dict):
+                    if item.get('type') == 'text':
+                        prompt = item.get('text', '')
+                        print(f"『执行』: 从数组格式中提取到文本: {prompt}")
+                    elif item.get('type') == 'image_url':
+                        # 从数组格式中提取图片URL，稍后会处理
+                        pass
+        else:
+            # 原格式：content是字符串
+            prompt = last_user_message
     
     print("『执行』: 用户发送的【原】提示词为：" + prompt)
+    
+    # 检查是否是kontext模型的图生图请求
+    is_img2img = False
+    image_url = ""
+    guidance_scale = 3.5
+    safety_tolerance = "2"
+    output_format = "jpeg"
+    num_images = 1
+    
+    # 从请求体中提取图生图参数
+    if model == "kontext":
+        # 如果是kontext模型，则从消息或请求体中提取图生图参数
+        image_url = openai_request.get('image_url', '')
+        
+        # 如果请求体中没有image_url，尝试从最后一条用户消息对象中直接获取image_url字段
+        if not image_url and messages:
+            for msg in reversed(messages):
+                if msg.get('role') == 'user':
+                    # 检查新格式：content数组中的image_url
+                    content = msg.get('content', '')
+                    if isinstance(content, list):
+                        # 新格式：从content数组中提取image_url
+                        for item in content:
+                            if isinstance(item, dict) and item.get('type') == 'image_url':
+                                image_url_obj = item.get('image_url', {})
+                                if isinstance(image_url_obj, dict):
+                                    image_url = image_url_obj.get('url', '')
+                                    if image_url:
+                                        print(f"『执行』: 从数组格式中获取到image_url: {image_url}")
+                                        break
+                    else:
+                        # 原格式：直接从消息对象中获取image_url字段
+                        if 'image_url' in msg:
+                            image_url = msg.get('image_url', '')
+                            print(f"『执行』: 从消息对象中获取到image_url: {image_url}")
+                    
+                    if image_url:
+                        break
+        
+        # 如果还没有找到image_url，尝试从最后一条用户消息内容中解析JSON（向后兼容）
+        if not image_url and last_user_message and isinstance(last_user_message, str):
+            # 尝试从消息中解析JSON
+            try:
+                import json
+                import re
+                
+                # 尝试找到JSON对象
+                json_match = re.search(r'\{.*\}', last_user_message, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(0)
+                    try:
+                        msg_json = json.loads(json_str)
+                        if 'image_url' in msg_json:
+                            image_url = msg_json.get('image_url', '')
+                            prompt = msg_json.get('prompt', prompt)
+                            guidance_scale = msg_json.get('guidance_scale', guidance_scale)
+                            safety_tolerance = msg_json.get('safety_tolerance', safety_tolerance)
+                            output_format = msg_json.get('output_format', output_format)
+                            num_images = msg_json.get('num_images', num_images)
+                            print(f"『执行』: 从JSON格式中获取到image_url: {image_url}")
+                    except:
+                        pass
+            except:
+                pass
+        
+        # 提取其他图生图参数
+        if not guidance_scale:
+            guidance_scale = openai_request.get('guidance_scale', 3.5)
+        if not safety_tolerance:
+            safety_tolerance = openai_request.get('safety_tolerance', '2')
+        if not output_format:
+            output_format = openai_request.get('output_format', 'jpeg')
+        if not num_images:
+            num_images = openai_request.get('num_images', 1)
+        
+        is_img2img = bool(image_url)
+        
+        if is_img2img:
+            print(f"『执行』: kontext图生图模式，图片URL: {image_url}")
     
     # 针对智谱AI模型处理 - 直接使用原始提示词而不做转换
     if model == "cogview-4-250304":
         print("『执行』: 智谱模型使用原始提示词")
+    elif model == "kontext":
+        # 非智谱模型，使用转换后的提示词
+        try:
+            #调用翻译接口
+            converted_prompt = make_request2('sk-Zjjy2zjicDpAh8ge705bCc6a1582406a8dAa88D1E2C9796f', prompt)
+            if converted_prompt:
+                prompt = converted_prompt
+                print("『执行』: 用户发送的【新】提示词为：" + prompt)
+        except Exception as e:
+            print(f"『执行』: 提示词转换失败: {str(e)}")
+        if is_img2img:
+            print(f"『执行』: kontext图生图模式使用原始提示词，图片URL: {image_url}")
+        else:
+            print(f"『执行』: kontext文生图模式使用原始提示词")
     else:
         # 非智谱模型，使用转换后的提示词
-        prompt = make_request('sk-Zjjy2zjicDpAh8ge705bCc6a1582406a8dAa88D1E2C9796f', prompt)
-        print("『执行』: 用户发送的【新】提示词为：" + prompt)
+        try:
+            converted_prompt = make_request('sk-Zjjy2zjicDpAh8ge705bCc6a1582406a8dAa88D1E2C9796f', prompt)
+            if converted_prompt:
+                prompt = converted_prompt
+                print("『执行』: 用户发送的【新】提示词为：" + prompt)
+        except Exception as e:
+            print(f"『执行』: 提示词转换失败: {str(e)}")
     
-    if not prompt:
+    if not prompt and not is_img2img:
         # 如果没有提示词，返回默认响应
         if stream:
             def generate():
@@ -631,8 +772,22 @@ def chat_completions():
             return jsonify(completions_response)
 
     try:
+        # 准备选项参数
+        options = {
+            "size": "1024x1024", # 默认尺寸
+            "seed": 42,
+            "output_format": output_format,
+            "num_images": num_images
+        }
+        
+        # 为kontext模型添加图生图参数
+        if is_img2img:
+            options["image_url"] = image_url
+            options["guidance_scale"] = guidance_scale
+            options["safety_tolerance"] = safety_tolerance
+            
         # 调用API生成图像 - 使用统一入口
-        image_urls = call_model_api(prompt, model)
+        image_urls = call_model_api(prompt, model, options)
 
         # 构建响应内容
         content = ""
@@ -851,7 +1006,10 @@ def generate_image():
         return jsonify({"error": {"message": "Missing or invalid request body", "type": "invalid_request_error"}}), 400
 
     prompt = openai_request.get('prompt', '')
-    if not prompt:
+    model = openai_request.get('model', 'flux-dev')
+    
+    # 对于kontext模型的图生图功能，prompt可以为空
+    if not prompt and model != "kontext":
         return jsonify({
             "error": {
                 "message": "prompt is required",
@@ -861,17 +1019,21 @@ def generate_image():
         }), 400
 
     # 提取请求参数
-    model = openai_request.get('model', 'flux-dev')
     size = openai_request.get('size', '1080x1920')
     seed = openai_request.get('seed', openai_request.get('user', 100010))
-    output_format = openai_request.get('response_format', 'jpeg')
-    num_images = openai_request.get('n', 1)  # 添加支持生成多张图片
+    output_format = openai_request.get('response_format', openai_request.get('output_format', 'jpeg'))
+    num_images = openai_request.get('n', openai_request.get('num_images', 1))
+    
+    # 提取kontext模型特有参数
+    image_url = openai_request.get('image_url', '')
+    guidance_scale = openai_request.get('guidance_scale', 3.5)
+    safety_tolerance = openai_request.get('safety_tolerance', '2')
     
     # 打印原始提示词
     print("『执行』: 图像生成原始提示词：" + prompt)
     
-    # 针对非智谱AI模型，转换提示词
-    if model != "cogview-4-250304":
+    # 针对非智谱AI模型的普通文生图，转换提示词
+    if model != "cogview-4-250304" and (model != "kontext" or not image_url):
         try:
             # 尝试转换提示词
             converted_prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
@@ -881,7 +1043,10 @@ def generate_image():
         except Exception as e:
             print(f"『执行』: 提示词转换失败: {str(e)}")
     else:
-        print("『执行』: 智谱模型使用原始提示词")
+        if model == "cogview-4-250304":
+            print("『执行』: 智谱模型使用原始提示词")
+        else:
+            print(f"『执行』: kontext图生图模式，使用原始提示词，图片URL: {image_url}")
 
     # 准备选项参数
     options = {
@@ -890,6 +1055,12 @@ def generate_image():
         "output_format": output_format,
         "num_images": num_images
     }
+    
+    # 为kontext模型添加图生图参数
+    if model == "kontext" and image_url:
+        options["image_url"] = image_url
+        options["guidance_scale"] = guidance_scale
+        options["safety_tolerance"] = safety_tolerance
 
     try:
         # 使用统一的API调用入口
@@ -946,6 +1117,8 @@ def list_models():
          "owned_by": "fal-openai-adapter", "permission": [], "root": "flux-1.1-pro", "parent": None},
         {"id": "ideogram-v2", "object": "model", "created": 1698785189,
          "owned_by": "fal-openai-adapter", "permission": [], "root": "ideogram-v2", "parent": None},
+        {"id": "kontext", "object": "model", "created": 1698785189,
+         "owned_by": "fal-openai-adapter", "permission": [], "root": "kontext", "parent": None},
         {"id": "cogview-4-250304", "object": "model", "created": 1698785189,
          "owned_by": "zhipuai-adapter", "permission": [], "root": "cogview-4-250304", "parent": None}
     ]
