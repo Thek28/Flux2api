@@ -18,7 +18,7 @@ app = Flask(__name__)
 HTTP_PROXY = os.environ.get("HTTP_PROXY", "")
 HTTPS_PROXY = os.environ.get("HTTPS_PROXY", "")
 API_KEY = os.environ.get("API_KEY", "")
-FAL_API_KEY = os.environ.get("FAL_API_KEY", "cee71284-f412-491a-86ff-ac5ff7097eb2:8f67a08677825cf33330a214d6a681ee")
+FAL_API_KEY = os.environ.get("FAL_API_KEY", "20f6cf79-e7d4-4fe0-b41d-b73969e81c64:0256c44c881115cd646cb21a0b5ee252")
 GML_API_KEY = os.environ.get("GML_API_KEY", "0e78255708974e158a8369212f0092b9.YojuGtv40BRAik8S")  # 从环境变量获取智谱API密钥
 
 FAL_API_KEY_LIST = FAL_API_KEY.split(",") if FAL_API_KEY else []
@@ -519,6 +519,77 @@ def call_model_api(prompt, model, options=None):
     else:
         return call_fal_api(prompt, model, options)
 
+def create_stream_chunks(model: str, content: str, include_usage: bool = False, prompt: str = ""):
+    """
+    创建流式响应的数据块，使用OpenAI标准的流式格式
+    
+    Args:
+        model: 模型名称
+        content: 响应内容
+        include_usage: 是否包含使用量信息
+        prompt: 原始提示词，用于计算token使用量
+    """
+    current_time = int(time.time())
+    request_id = f"chatcmpl-{current_time}"
+    
+    # 计算使用量
+    usage = {
+        "prompt_tokens": len(prompt) // 4 if prompt else 0,
+        "completion_tokens": len(content) // 4,
+        "total_tokens": (len(prompt) // 4 if prompt else 0) + (len(content) // 4)
+    }
+    
+    # 发送角色
+    yield f"data: {json.dumps({
+        'id': request_id,
+        'object': 'chat.completion.chunk',
+        'created': current_time,
+        'model': model,
+        'choices': [{
+            'index': 0,
+            'delta': {
+                'role': 'assistant'
+            },
+            'finish_reason': None
+        }]
+    })}\n\n"
+    
+    # 发送内容
+    response_with_content = {
+        'id': request_id,
+        'object': 'chat.completion.chunk',
+        'created': current_time,
+        'model': model,
+        'choices': [{
+            'index': 0,
+            'delta': {
+                'content': content
+            },
+            'finish_reason': None
+        }]
+    }
+    
+    # 如果需要包含使用量信息，添加到内容块中
+    if include_usage:
+        response_with_content['choices'][0]['delta']['usage'] = usage
+        
+    yield f"data: {json.dumps(response_with_content)}\n\n"
+    
+    # 发送完成标记
+    yield f"data: {json.dumps({
+        'id': request_id,
+        'object': 'chat.completion.chunk',
+        'created': current_time,
+        'model': model,
+        'choices': [{
+            'index': 0,
+            'delta': {},
+            'finish_reason': 'stop'
+        }]
+    })}\n\n"
+    
+    yield "data: [DONE]\n\n"
+
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     """
@@ -557,6 +628,10 @@ def chat_completions():
     stream = openai_request.get('stream', False)
     messages = openai_request.get('messages', [])
     model = openai_request.get('model', 'flux-1.1-ultra')  # Default
+    
+    # 获取流式选项
+    stream_options = openai_request.get('stream_options', {})
+    include_usage = stream_options.get('include_usage', False) if stream_options else False
 
     # 使用最后一条用户消息作为提示
     prompt = ""
@@ -688,62 +763,14 @@ def chat_completions():
     if not prompt and not is_img2img:
         # 如果没有提示词，返回默认响应
         if stream:
-            def generate():
-                current_time = int(time.time())
-                # 首先发送正在思考的消息
-                response_start = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "role": "assistant"
-                            },
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_start)}\n\n"
-
-                # 分段发送内容
-                response_content = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "content": "I can generate images. Describe what you'd like."
-                            },
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_content)}\n\n"
-
-                # 最后发送完成标记
-                response_end = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_end)}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return Response(stream_with_context(generate()), content_type='text/event-stream')
+            return Response(
+                stream_with_context(create_stream_chunks(
+                    model=model,
+                    content="I can generate images. Describe what you'd like.",
+                    include_usage=include_usage
+                )),
+                content_type='text/event-stream'
+            )
         else:
             # 非流式响应
             completions_response = {
@@ -797,64 +824,15 @@ def chat_completions():
             content += f"![Generated Image {i + 1}]({url}) "
 
         if stream:
-            # 流式输出
-            def generate():
-                current_time = int(time.time())
-
-                # 首先发送角色
-                response_role = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "role": "assistant"
-                            },
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_role)}\n\n"
-
-                # 然后直接发送图片链接(作为Markdown格式)
-                response_content = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "content": content
-                            },
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_content)}\n\n"
-
-                # 最后发送完成标记
-                response_end = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_end)}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return Response(stream_with_context(generate()), content_type='text/event-stream')
+            return Response(
+                stream_with_context(create_stream_chunks(
+                    model=model,
+                    content=content,
+                    include_usage=include_usage,
+                    prompt=prompt
+                )),
+                content_type='text/event-stream'
+            )
         else:
             # 生成标准OpenAI格式的响应
             completions_response = {
@@ -890,64 +868,15 @@ def chat_completions():
         error_message = f"Unable to generate an image: {str(e)}. Try a different description."
 
         if stream:
-            # 流式输出错误信息
-            def generate():
-                current_time = int(time.time())
-
-                # 发送角色
-                response_role = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "role": "assistant"
-                            },
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_role)}\n\n"
-
-                # 发送错误信息
-                response_error = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {
-                                "content": error_message
-                            },
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_error)}\n\n"
-
-                # 发送完成标记
-                response_end = {
-                    "id": f"chatcmpl-{current_time}",
-                    "object": "chat.completion.chunk",
-                    "created": current_time,
-                    "model": model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(response_end)}\n\n"
-                yield "data: [DONE]\n\n"
-
-            return Response(stream_with_context(generate()), content_type='text/event-stream')
+            return Response(
+                stream_with_context(create_stream_chunks(
+                    model=model,
+                    content=error_message,
+                    include_usage=include_usage,
+                    prompt=prompt
+                )),
+                content_type='text/event-stream'
+            )
         else:
             # 返回标准错误响应
             completions_response = {
