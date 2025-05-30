@@ -18,7 +18,7 @@ app = Flask(__name__)
 HTTP_PROXY = os.environ.get("HTTP_PROXY", "")
 HTTPS_PROXY = os.environ.get("HTTPS_PROXY", "")
 API_KEY = os.environ.get("API_KEY", "")
-FAL_API_KEY = os.environ.get("FAL_API_KEY", "20f6cf79-e7d4-4fe0-b41d-b73969e81c64:0256c44c881115cd646cb21a0b5ee252")
+FAL_API_KEY = os.environ.get("FAL_API_KEY", "b149a70d-5650-447e-999a-958533f47bf8:2358db012fde8f6744d36e962bf66c92")
 GML_API_KEY = os.environ.get("GML_API_KEY", "0e78255708974e158a8369212f0092b9.YojuGtv40BRAik8S")  # 从环境变量获取智谱API密钥
 
 FAL_API_KEY_LIST = FAL_API_KEY.split(",") if FAL_API_KEY else []
@@ -597,6 +597,8 @@ def chat_completions():
             }
         }), 400
 
+    # 检查是否请求流式输出
+    stream = openai_request.get('stream', False)
     messages = openai_request.get('messages', [])
     model = openai_request.get('model', 'flux-1.1-ultra')  # Default
     
@@ -757,36 +759,160 @@ def chat_completions():
         # 调用API生成图像 - 使用统一入口
         image_urls = call_model_api(prompt, model, options)
 
-        # 构建响应内容
+    # 构建响应内容
         content = ""
         for i, url in enumerate(image_urls):
             if i > 0:
                 content += "\n\n"
             content += f"![Generated Image {i + 1}]({url}) "
 
-        return jsonify(create_response(
-            model=model,
-            content=content,
-            include_usage=include_usage,
-            prompt=prompt
-        ))
+        if stream:
+            # 流式输出
+            def generate():
+                import json  # 在嵌套函数内部导入json模块避免作用域问题
+                current_time = int(time.time())
+                request_id = f"chatcmpl-{current_time}"
+
+                # 首先发送角色
+                response_role = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": current_time,
+                    "model": model,
+                    "system_fingerprint": f"fp_{current_time}",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "role": "assistant"
+                            },
+                            "logprobs": None,
+                            "finish_reason": None
+                        }
+                    ]
+                }
+                yield f"data: {json.dumps(response_role)}\n\n"
+
+                # 然后发送图片内容
+                response_content = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": current_time,
+                    "model": model,
+                    "system_fingerprint": f"fp_{current_time}",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "content": content
+                            },
+                            "logprobs": None,
+                            "finish_reason": None
+                        }
+                    ]
+                }
+                yield f"data: {json.dumps(response_content)}\n\n"
+
+                # 发送完成标记
+                response_end = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": current_time,
+                    "model": model,
+                    "system_fingerprint": f"fp_{current_time}",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "logprobs": None,
+                            "finish_reason": "stop"
+                        }
+                    ]
+                }
+                yield f"data: {json.dumps(response_end)}\n\n"
+
+                # 如果需要包含usage信息
+                if include_usage:
+                    usage_response = {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": current_time,
+                        "model": model,
+                        "system_fingerprint": f"fp_{current_time}",
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": len(prompt) // 4 if prompt else 0,
+                            "completion_tokens": len(content) // 4,
+                            "total_tokens": (len(prompt) // 4 if prompt else 0) + (len(content) // 4)
+                        }
+                    }
+                    yield f"data: {json.dumps(usage_response)}\n\n"
+
+                # 结束标记
+                yield "data: [DONE]\n\n"
+
+            return Response(stream_with_context(generate()), content_type='text/event-stream')
+        else:
+            # 生成标准OpenAI格式的响应
+            completions_response = {
+                "id": f"chatcmpl-{int(time.time())}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": content
+                        },
+                        "logprobs": None,
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": len(prompt) // 4,
+                    "completion_tokens": len(content) // 4,
+                    "total_tokens": (len(prompt) // 4) + (len(content) // 4)
+                },
+                "system_fingerprint": f"fp_{int(time.time())}"
+            }
+
+            print(f"Returning OpenAI completions-style response")
+            return jsonify(completions_response)
 
     except ValueError as e:
-        # 处理已知错误
-        print(f"Error: {str(e)}")
-        error_message = f"Unable to generate an image: {str(e)}. Try a different description."
-
-        return jsonify(create_response(
-            model=model,
-            content=error_message,
-            include_usage=include_usage,
-            prompt=prompt
-        ))
+        # 处理API相关的已知错误
+        error_message = str(e)
+        print(f"『错误』: API调用失败: {error_message}")
+        
+        # 检查是否是认证错误
+        if "Authentication error" in error_message or "api_key" in error_message.lower() or "unauthorized" in error_message.lower():
+            return jsonify({
+                "error": {
+                    "message": error_message,
+                    "type": "invalid_api_key"
+                }
+            }), 401
+        
+        # 其他API错误
+        return jsonify({
+            "error": {
+                "message": error_message,
+                "type": "api_error"
+            }
+        }), 500
 
     except Exception as e:
-        # 处理未知错误
-        print(f"Exception: {str(e)}")
-        return jsonify({"error": {"message": f"Server error: {str(e)}", "type": "server_error"}}), 500
+        # 处理未知异常
+        error_message = f"生成图像时发生错误: {str(e)}"
+        print(f"『错误』: {error_message}")
+        return jsonify({
+            "error": {
+                "message": error_message,
+                "type": "server_error"
+            }
+        }), 500
 
 @app.route('/v1/images/generations', methods=['POST'])
 def generate_image():
