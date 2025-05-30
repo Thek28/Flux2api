@@ -519,9 +519,9 @@ def call_model_api(prompt, model, options=None):
     else:
         return call_fal_api(prompt, model, options)
 
-def create_stream_chunks(model: str, content: str, include_usage: bool = False, prompt: str = ""):
+def create_response(model: str, content: str, include_usage: bool = False, prompt: str = ""):
     """
-    创建流式响应的数据块，返回完整的OpenAI格式响应
+    创建标准的OpenAI格式响应
     
     Args:
         model: 模型名称
@@ -562,14 +562,12 @@ def create_stream_chunks(model: str, content: str, include_usage: bool = False, 
     if include_usage:
         complete_response["usage"] = usage
     
-    # 只发送一次完整的响应
-    yield f"{json.dumps(complete_response)}\n\n"
+    return complete_response
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_completions():
     """
     处理聊天完成请求，路由到不同的模型。
-    支持流式输出和标准响应格式。
     """
     auth_header = request.headers.get('Authorization', '')
     print(f"Received Authorization header: {auth_header}")
@@ -599,8 +597,6 @@ def chat_completions():
             }
         }), 400
 
-    # 检查是否请求流式输出
-    stream = openai_request.get('stream', False)
     messages = openai_request.get('messages', [])
     model = openai_request.get('model', 'flux-1.1-ultra')  # Default
     
@@ -737,41 +733,11 @@ def chat_completions():
     
     if not prompt and not is_img2img:
         # 如果没有提示词，返回默认响应
-        if stream:
-            return Response(
-                stream_with_context(create_stream_chunks(
-                    model=model,
-                    content="I can generate images. Describe what you'd like.",
-                    include_usage=include_usage
-                )),
-                content_type='text/event-stream'
-            )
-        else:
-            # 非流式响应
-            completions_response = {
-                "id": f"chatcmpl-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": "I can generate images. Describe what you'd like."
-                        },
-                        "logprobs": None,
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": len(json.dumps(messages)) // 4,
-                    "completion_tokens": 20,
-                    "total_tokens": (len(json.dumps(messages)) // 4) + 20
-                },
-                "system_fingerprint": f"fp_{int(time.time())}"
-            }
-            return jsonify(completions_response)
+        return jsonify(create_response(
+            model=model,
+            content="I can generate images. Describe what you'd like.",
+            include_usage=include_usage
+        ))
 
     try:
         # 准备选项参数
@@ -798,86 +764,24 @@ def chat_completions():
                 content += "\n\n"
             content += f"![Generated Image {i + 1}]({url}) "
 
-        if stream:
-            return Response(
-                stream_with_context(create_stream_chunks(
-                    model=model,
-                    content=content,
-                    include_usage=include_usage,
-                    prompt=prompt
-                )),
-                content_type='text/event-stream'
-            )
-        else:
-            # 生成标准OpenAI格式的响应
-            completions_response = {
-                "id": f"chatcmpl-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": content
-                        },
-                        "logprobs": None,
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": len(prompt) // 4,
-                    "completion_tokens": len(content) // 4,
-                    "total_tokens": (len(prompt) // 4) + (len(content) // 4)
-                },
-                "system_fingerprint": f"fp_{int(time.time())}"
-            }
-
-            print(f"Returning OpenAI completions-style response")
-            return jsonify(completions_response)
+        return jsonify(create_response(
+            model=model,
+            content=content,
+            include_usage=include_usage,
+            prompt=prompt
+        ))
 
     except ValueError as e:
         # 处理已知错误
         print(f"Error: {str(e)}")
         error_message = f"Unable to generate an image: {str(e)}. Try a different description."
 
-        if stream:
-            return Response(
-                stream_with_context(create_stream_chunks(
-                    model=model,
-                    content=error_message,
-                    include_usage=include_usage,
-                    prompt=prompt
-                )),
-                content_type='text/event-stream'
-            )
-        else:
-            # 返回标准错误响应
-            completions_response = {
-                "id": f"chatcmpl-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": model,
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": error_message
-                        },
-                        "logprobs": None,
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": len(prompt) // 4,
-                    "completion_tokens": len(error_message) // 4,
-                    "total_tokens": (len(prompt) // 4) + (len(error_message) // 4)
-                },
-                "system_fingerprint": f"fp_{int(time.time())}"
-            }
-            return jsonify(completions_response)
+        return jsonify(create_response(
+            model=model,
+            content=error_message,
+            include_usage=include_usage,
+            prompt=prompt
+        ))
 
     except Exception as e:
         # 处理未知错误
