@@ -633,7 +633,7 @@ def chat_completions():
     guidance_scale = 3.5
     safety_tolerance = "5"
     output_format = "jpeg"
-    num_images = 4
+    num_images = 1
     aspect_ratio = "16:9"
     
     # 从请求体中提取图生图参数
