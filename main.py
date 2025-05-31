@@ -631,9 +631,10 @@ def chat_completions():
     is_img2img = False
     image_url = ""
     guidance_scale = 3.5
-    safety_tolerance = "2"
+    safety_tolerance = "5"
     output_format = "jpeg"
-    num_images = 1
+    num_images = 4
+    aspect_ratio = "16:9"
     
     # 从请求体中提取图生图参数
     if model == "kontext":
@@ -683,6 +684,7 @@ def chat_completions():
                             prompt = msg_json.get('prompt', prompt)
                             guidance_scale = msg_json.get('guidance_scale', guidance_scale)
                             safety_tolerance = msg_json.get('safety_tolerance', safety_tolerance)
+                            aspect_ratio = msg_json.get('aspect_ratio', aspect_ratio)
                             output_format = msg_json.get('output_format', output_format)
                             num_images = msg_json.get('num_images', num_images)
                             print(f"『执行』: 从JSON格式中获取到image_url: {image_url}")
@@ -696,6 +698,8 @@ def chat_completions():
             guidance_scale = openai_request.get('guidance_scale', 3.5)
         if not safety_tolerance:
             safety_tolerance = openai_request.get('safety_tolerance', '2')
+        if not aspect_ratio:
+            aspect_ratio = openai_request.get('aspect_ratio', '16:9')
         if not output_format:
             output_format = openai_request.get('output_format', 'jpeg')
         if not num_images:
@@ -744,7 +748,7 @@ def chat_completions():
     try:
         # 准备选项参数
         options = {
-            "size": "1024x1024", # 默认尺寸
+            "size": "1184x880", # 默认尺寸
             "seed": 42,
             "output_format": output_format,
             "num_images": num_images
