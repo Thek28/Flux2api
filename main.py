@@ -47,7 +47,7 @@ MODEL_URLS = {
         "status_base_url": "https://queue.fal.run/fal-ai/flux"
     },
     "kontext": {
-        "submit_url": "https://queue.fal.run/fal-ai/flux-pro/kontext",
+        "submit_url": "https://queue.fal.run/fal-ai/flux-pro/kontext/max",
         "status_base_url": "https://queue.fal.run/fal-ai/flux-pro"
     },
     "cogview-4-250304": {
