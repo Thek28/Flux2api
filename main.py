@@ -6,11 +6,16 @@ import os
 import re  # Import the 're' module
 import math
 import random
+import jwt  # 添加jwt导入，用于可灵AI认证
+import urllib3  # 添加urllib3导入
 try:
     from zhipuai import ZhipuAI
 except ImportError:
     print("警告：zhipuai 库未安装，智谱文生图功能将不可用。请使用 pip install zhipuai 安装。")
     ZhipuAI = None
+
+# 禁用SSL警告
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -18,11 +23,15 @@ app = Flask(__name__)
 HTTP_PROXY = os.environ.get("HTTP_PROXY", "")
 HTTPS_PROXY = os.environ.get("HTTPS_PROXY", "")
 API_KEY = os.environ.get("API_KEY", "")
-FAL_API_KEY = os.environ.get("FAL_API_KEY", "b149a70d-5650-447e-999a-958533f47bf8:2358db012fde8f6744d36e962bf66c92")
+FAL_API_KEY = os.environ.get("FAL_API_KEY", "f85686c1-75f9-40e5-93fd-ef84be83d4e9:97fa06aeaecf1fb2d873a0a78a90c7d7")
 GML_API_KEY = os.environ.get("GML_API_KEY", "0e78255708974e158a8369212f0092b9.YojuGtv40BRAik8S")  # 从环境变量获取智谱API密钥
+KLING_ACCESS_KEY = os.environ.get("KLING_ACCESS_KEY", "Abnhn3hn3HTY4bDpRCPRtTygQKnagLYf")  # 可灵AI Access Key
+KLING_SECRET_KEY = os.environ.get("KLING_SECRET_KEY", "3kEpKACeCQbrJTEHTHBJafLfbF83eYJC")  # 可灵AI Secret Key
 
 FAL_API_KEY_LIST = FAL_API_KEY.split(",") if FAL_API_KEY else []
 GML_API_KEY_LIST = GML_API_KEY.split(",") if GML_API_KEY else []  # 支持多个API KEY轮询
+KLING_ACCESS_KEY_LIST = KLING_ACCESS_KEY.split(",") if KLING_ACCESS_KEY else []  # 支持多个可灵Access Key
+KLING_SECRET_KEY_LIST = KLING_SECRET_KEY.split(",") if KLING_SECRET_KEY else []  # 支持多个可灵Secret Key
 
 # Restructured MODEL_URLS to separate submit and status/result URLs
 MODEL_URLS = {
@@ -53,6 +62,10 @@ MODEL_URLS = {
     "cogview-4-250304": {
         "provider": "zhipuai",  # 标记为智谱提供商
         "model": "cogview-4-250304"  # 智谱模型名称
+    },
+    "kling-v1-5": {
+        "provider": "kling",  # 标记为可灵提供商
+        "model": "kling-v1-5"  # 可灵模型名称
     }
 }
 
@@ -138,6 +151,37 @@ def get_gml_api_key():
     if GML_API_KEY_LIST:
         return random.choice(GML_API_KEY_LIST)
     raise ValueError("GML_API_KEY is not set.")
+
+def get_kling_credentials():
+    # 随机获取可灵AI认证凭据
+    if KLING_ACCESS_KEY_LIST and KLING_SECRET_KEY_LIST:
+        index = random.randint(0, min(len(KLING_ACCESS_KEY_LIST), len(KLING_SECRET_KEY_LIST)) - 1)
+        return KLING_ACCESS_KEY_LIST[index], KLING_SECRET_KEY_LIST[index]
+    raise ValueError("KLING_ACCESS_KEY or KLING_SECRET_KEY is not set.")
+
+def generate_kling_jwt_token(access_key: str, secret_key: str, exp_seconds: int = 1800) -> str:
+    """
+    生成可灵AI的JWT token
+    
+    Args:
+        access_key: Access Key
+        secret_key: Secret Key  
+        exp_seconds: token有效时间（秒），默认1800秒（30分钟）
+    
+    Returns:
+        生成的JWT token字符串
+    """
+    headers = {
+        "alg": "HS256",
+        "typ": "JWT"
+    }
+    payload = {
+        "iss": access_key,
+        "exp": int(time.time()) + exp_seconds,  # 有效时间
+        "nbf": int(time.time()) - 5  # 开始生效的时间，当前时间-5秒
+    }
+    token = jwt.encode(payload, secret_key, headers=headers)
+    return token
 
 def validate_api_key(api_key):
     if API_KEY and API_KEY != api_key:
@@ -491,6 +535,230 @@ def call_gml_api(prompt, model, options=None):
     
     return image_urls
 
+def call_kling_api(prompt, model, options=None):
+    """
+    调用可灵AI生成图像
+    
+    Args:
+        prompt: 用于生成图像的文本提示
+        model: 使用的模型名称
+        options: 附加选项，如aspect_ratio等
+        
+    Returns:
+        成功时返回图像URL列表，失败时抛出异常
+    """
+    if options is None:
+        options = {}
+    
+    # 可灵AI支持的标准宽高比
+    supported_ratios = {
+        "1:1": "1:1",      # 正方形
+        "16:9": "16:9",    # 横屏
+        "9:16": "9:16",    # 竖屏
+        "3:4": "3:4",      # 竖屏
+        "4:3": "4:3",      # 横屏
+        "21:9": "21:9",    # 超宽屏
+        "9:21": "9:21"     # 超高屏
+    }
+    
+    # 将size转换为可灵AI支持的aspect_ratio格式
+    aspect_ratio = "9:16"  # 默认值
+    if "size" in options:
+        width, height = map(int, options["size"].split("x"))
+        
+        # 计算比例并找到最接近的支持比例
+        ratio = width / height
+        best_ratio = "9:16"  # 默认
+        min_diff = float('inf')
+        
+        for ratio_key, ratio_value in supported_ratios.items():
+            w, h = map(int, ratio_key.split(":"))
+            target_ratio = w / h
+            diff = abs(ratio - target_ratio)
+            if diff < min_diff:
+                min_diff = diff
+                best_ratio = ratio_value
+        
+        aspect_ratio = best_ratio
+        print(f"原始尺寸: {width}x{height}, 转换为可灵AI支持的宽高比: {aspect_ratio}")
+    
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count <= max_retries:
+        try:
+            # 获取可灵AI认证凭据
+            access_key, secret_key = get_kling_credentials()
+            authorization = generate_kling_jwt_token(access_key, secret_key)
+            
+            print(f"Attempt {retry_count + 1}/{max_retries + 1} - Using Kling access_key: {access_key[:5]}...{access_key[-5:] if len(access_key) > 10 else ''}")
+            
+            # 第一步：提交任务
+            url = "https://api-beijing.klingai.com/v1/images/generations"
+            payload = {
+                "model_name": model,
+                "prompt": prompt,
+                "n": options.get("num_images", 1),
+                "aspect_ratio": aspect_ratio
+            }
+            
+            # 如果有图片URL，添加image字段和image_reference字段（图生图功能）
+            if "image_url" in options and options["image_url"]:
+                payload["image"] = options["image_url"]
+                payload["image_reference"] = "subject"  # 图生图模式必需参数
+                payload["resolution"] = "1k"  # 图生图模式必需参数
+                print(f"可灵AI图生图模式，添加image字段: {options['image_url']}")
+                print(f"可灵AI图生图模式，添加image_reference字段: subject")
+            
+            headers = {
+                'Authorization': f'Bearer {authorization}',
+                'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
+                'Content-Type': 'application/json',
+                'Accept': '*/*',
+                'Host': 'api-beijing.klingai.com',
+                'Connection': 'keep-alive'
+            }
+            
+            proxies = get_proxies()
+            
+            print(f"提交可灵AI任务: {prompt[:50]}...")
+            submit_response = requests.post(
+                url, 
+                headers=headers, 
+                json=payload,
+                proxies=proxies,
+                timeout=60,
+                verify=False
+            )
+            
+            if submit_response.status_code != 200:
+                error_text = submit_response.text
+                print(f"可灵AI提交失败: {submit_response.status_code}, {error_text}")
+                
+                if submit_response.status_code in (401, 403):
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        print(f"可灵AI认证失败，尝试使用新的认证凭据重试 ({retry_count}/{max_retries})")
+                        time.sleep(2 ** retry_count)
+                        continue
+                    else:
+                        raise ValueError(f"Authentication error with Kling AI after {max_retries} retries: {error_text}")
+                
+                if retry_count < max_retries:
+                    retry_count += 1
+                    print(f"可灵AI API错误，进行重试 ({retry_count}/{max_retries})")
+                    time.sleep(2 ** retry_count)
+                    continue
+                
+                raise ValueError(f"Kling AI API error: {error_text}")
+            
+            # 解析提交响应
+            submit_data = submit_response.json()
+            if submit_data.get('code') != 0:
+                error_msg = submit_data.get('message', '未知错误')
+                if retry_count < max_retries:
+                    retry_count += 1
+                    print(f"可灵AI API返回错误，进行重试 ({retry_count}/{max_retries}): {error_msg}")
+                    time.sleep(2 ** retry_count)
+                    continue
+                raise ValueError(f"Kling AI API error: {error_msg}")
+            
+            task_id = submit_data['data']['task_id']
+            print(f"可灵AI任务提交成功，task_id: {task_id}")
+            
+            # 第二步：轮询任务状态
+            max_wait_time = 300  # 5分钟超时
+            poll_interval = 5    # 5秒轮询间隔
+            start_time = time.time()
+            check_count = 0
+            
+            while time.time() - start_time < max_wait_time:
+                check_count += 1
+                print(f"第{check_count}次检查可灵AI任务状态: {task_id}")
+                
+                status_url = f"https://api-beijing.klingai.com/v1/images/generations/{task_id}"
+                status_response = requests.get(
+                    status_url,
+                    headers=headers,
+                    proxies=proxies,
+                    timeout=60,
+                    verify=False
+                )
+                
+                if status_response.status_code != 200:
+                    print(f"状态查询失败: {status_response.status_code}")
+                    time.sleep(poll_interval)
+                    continue
+                
+                status_data = status_response.json()
+                if status_data.get('code') != 0:
+                    print(f"状态查询API错误: {status_data.get('message', '未知错误')}")
+                    time.sleep(poll_interval)
+                    continue
+                
+                task_data = status_data['data']
+                task_status = task_data.get('task_status')
+                task_status_msg = task_data.get('task_status_msg', '')
+                
+                print(f"可灵AI当前状态: {task_status}")
+                if task_status_msg:
+                    print(f"状态信息: {task_status_msg}")
+                
+                if task_status == 'succeed':
+                    print("🎉 可灵AI任务完成！")
+                    # 提取图片URLs
+                    image_urls = []
+                    if 'task_result' in task_data and 'images' in task_data['task_result']:
+                        images = task_data['task_result']['images']
+                        for img in images:
+                            if 'url' in img:
+                                image_urls.append(img['url'])
+                                print(f"可灵AI生成图片: {img['url']}")
+                    
+                    if image_urls:
+                        return image_urls
+                    else:
+                        raise ValueError("可灵AI任务完成但未找到图片")
+                        
+                elif task_status == 'failed':
+                    error_msg = f"可灵AI任务执行失败: {task_status_msg}"
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        print(f"{error_msg}，进行重试 ({retry_count}/{max_retries})")
+                        time.sleep(2 ** retry_count)
+                        break  # 跳出状态检查循环，重新开始外部尝试
+                    raise ValueError(error_msg)
+                elif task_status in ['submitted', 'processing']:
+                    print(f"⏳ 可灵AI任务进行中，{poll_interval}秒后重新检查...")
+                    time.sleep(poll_interval)
+                else:
+                    print(f"⚠️ 未知状态: {task_status}，{poll_interval}秒后重试...")
+                    time.sleep(poll_interval)
+            
+            # 超时处理
+            if retry_count < max_retries:
+                retry_count += 1
+                print(f"可灵AI任务等待超时，进行重试 ({retry_count}/{max_retries})")
+                time.sleep(2 ** retry_count)
+                continue
+            
+            raise ValueError(f"可灵AI任务等待超时 ({max_wait_time}秒，检查了{check_count}次)")
+            
+        except ValueError:
+            # ValueError是业务逻辑错误，直接抛出
+            raise
+        except Exception as e:
+            error_message = str(e)
+            print(f"可灵AI异常: {error_message}")
+            
+            if retry_count < max_retries:
+                retry_count += 1
+                print(f"发生异常，进行重试 ({retry_count}/{max_retries}): {error_message}")
+                time.sleep(2 ** retry_count)
+                continue
+            
+            raise ValueError(f"Error calling Kling AI: {error_message}")
+
 def call_model_api(prompt, model, options=None):
     """
     统一的API调用入口，根据模型类型分发到不同的API调用函数
@@ -516,6 +784,8 @@ def call_model_api(prompt, model, options=None):
     provider = model_info.get("provider")
     if provider == "zhipuai":
         return call_gml_api(prompt, model_info.get("model"), options)
+    elif provider == "kling":
+        return call_kling_api(prompt, model_info.get("model"), options)
     else:
         return call_fal_api(prompt, model, options)
 
@@ -608,6 +878,7 @@ def chat_completions():
 
     # 使用最后一条用户消息作为提示
     prompt = ""
+    image_url_for_kling = ""  # 用于可灵AI的图片URL
     last_user_message = next((msg['content'] for msg in reversed(messages) if msg.get('role') == 'user'), None)
     if last_user_message:
         # 检查content是否为数组格式（新的视觉模型格式）
@@ -619,8 +890,12 @@ def chat_completions():
                         prompt = item.get('text', '')
                         print(f"『执行』: 从数组格式中提取到文本: {prompt}")
                     elif item.get('type') == 'image_url':
-                        # 从数组格式中提取图片URL，稍后会处理
-                        pass
+                        # 从数组格式中提取图片URL，用于可灵AI图生图
+                        image_url_obj = item.get('image_url', {})
+                        if isinstance(image_url_obj, dict):
+                            image_url_for_kling = image_url_obj.get('url', '')
+                            if image_url_for_kling:
+                                print(f"『执行』: 提取到可灵AI图生图URL: {image_url_for_kling}")
         else:
             # 原格式：content是字符串
             prompt = last_user_message
@@ -710,9 +985,11 @@ def chat_completions():
         if is_img2img:
             print(f"『执行』: kontext图生图模式，图片URL: {image_url}")
     
-    # 针对智谱AI模型处理 - 直接使用原始提示词而不做转换
+    # 针对智谱AI和可灵AI模型处理 - 直接使用原始提示词而不做转换
     if model == "cogview-4-250304":
         print("『执行』: 智谱模型使用原始提示词")
+    elif model == "kling-v1-5":
+        print("『执行』: 可灵AI模型使用原始提示词")
     elif model == "kontext":
         # 非智谱模型，使用转换后的提示词
         try:
@@ -737,8 +1014,11 @@ def chat_completions():
         except Exception as e:
             print(f"『执行』: 提示词转换失败: {str(e)}")
     
-    if not prompt and not is_img2img:
-        # 如果没有提示词，返回默认响应
+    # 检查是否是可灵AI图生图模式
+    is_kling_img2img = model == "kling-v1-5" and image_url_for_kling
+    
+    if not prompt and not is_img2img and not is_kling_img2img:
+        # 如果没有提示词且不是图生图模式，返回默认响应
         return jsonify(create_response(
             model=model,
             content="I can generate images. Describe what you'd like.",
@@ -746,14 +1026,26 @@ def chat_completions():
         ))
 
     try:
-        # 准备选项参数
+        # 准备选项参数 - 针对不同模型使用不同的默认尺寸
+        if model == "kling-v1-5":
+            # 可灵AI使用标准的9:16竖屏比例
+            default_size = "1080x1920"
+        else:
+            # 其他模型使用原默认尺寸
+            default_size = "1184x880"
+            
         options = {
-            "size": "1184x880", # 默认尺寸
+            "size": default_size,
             "seed": 42,
             "output_format": output_format,
             "num_images": num_images
         }
         
+        # 为可灵AI模型添加图生图参数
+        if model == "kling-v1-5" and image_url_for_kling:
+            options["image_url"] = image_url_for_kling
+            print(f"『执行』: 可灵AI图生图模式，使用图片: {image_url_for_kling}")
+            
         # 为kontext模型添加图生图参数
         if is_img2img:
             options["image_url"] = image_url
@@ -946,8 +1238,9 @@ def generate_image():
     prompt = openai_request.get('prompt', '')
     model = openai_request.get('model', 'flux-dev')
     
-    # 对于kontext模型的图生图功能，prompt可以为空
-    if not prompt and model != "kontext":
+    # 对于kontext和可灵AI图生图模型，prompt可以为空
+    image_url_direct = openai_request.get('image_url', '')  # 直接从请求中获取image_url
+    if not prompt and model not in ["kontext", "kling-v1-5"]:
         return jsonify({
             "error": {
                 "message": "prompt is required",
@@ -956,8 +1249,13 @@ def generate_image():
             }
         }), 400
 
-    # 提取请求参数
-    size = openai_request.get('size', '1080x1920')
+    # 提取请求参数 - 针对不同模型使用不同的默认尺寸
+    if model == "kling-v1-5":
+        default_size = "1080x1920"  # 可灵AI使用9:16标准比例
+    else:
+        default_size = "1080x1920"  # 保持原有默认值
+        
+    size = openai_request.get('size', default_size)
     seed = openai_request.get('seed', openai_request.get('user', 100010))
     output_format = openai_request.get('response_format', openai_request.get('output_format', 'jpeg'))
     num_images = openai_request.get('n', openai_request.get('num_images', 1))
@@ -970,8 +1268,8 @@ def generate_image():
     # 打印原始提示词
     print("『执行』: 图像生成原始提示词：" + prompt)
     
-    # 针对非智谱AI模型的普通文生图，转换提示词
-    if model != "cogview-4-250304" and (model != "kontext" or not image_url):
+    # 针对非智谱AI和非可灵AI模型的普通文生图，转换提示词
+    if model not in ["cogview-4-250304", "kling-v1-5"] and (model != "kontext" or not image_url):
         try:
             # 尝试转换提示词
             converted_prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
@@ -983,6 +1281,8 @@ def generate_image():
     else:
         if model == "cogview-4-250304":
             print("『执行』: 智谱模型使用原始提示词")
+        elif model == "kling-v1-5":
+            print("『执行』: 可灵AI模型使用原始提示词")
         else:
             print(f"『执行』: kontext图生图模式，使用原始提示词，图片URL: {image_url}")
 
@@ -994,6 +1294,11 @@ def generate_image():
         "num_images": num_images
     }
     
+    # 为可灵AI模型添加图生图参数
+    if model == "kling-v1-5" and image_url_direct:
+        options["image_url"] = image_url_direct
+        print(f"『执行』: 可灵AI图生图模式（直接端点），使用图片: {image_url_direct}")
+        
     # 为kontext模型添加图生图参数
     if model == "kontext" and image_url:
         options["image_url"] = image_url
@@ -1058,7 +1363,9 @@ def list_models():
         {"id": "kontext", "object": "model", "created": 1698785189,
          "owned_by": "fal-openai-adapter", "permission": [], "root": "kontext", "parent": None},
         {"id": "cogview-4-250304", "object": "model", "created": 1698785189,
-         "owned_by": "zhipuai-adapter", "permission": [], "root": "cogview-4-250304", "parent": None}
+         "owned_by": "zhipuai-adapter", "permission": [], "root": "cogview-4-250304", "parent": None},
+        {"id": "kling-v1-5", "object": "model", "created": 1698785189,
+         "owned_by": "kling-adapter", "permission": [], "root": "kling-v1-5", "parent": None}
     ]
     return jsonify({"object": "list", "data": models})
 
@@ -1067,17 +1374,22 @@ if __name__ == "__main__":
     # 检查环境变量
     missing_keys = []
     if not FAL_API_KEY:
-        print("警告: FAL_API_KEY 未设置。部分功能可能不可用。")
+        print("警告: FAL_API_KEY 未设置。FAL模型功能将不可用。")
         missing_keys.append("FAL_API_KEY")
     
     if not GML_API_KEY and ZhipuAI is not None:
         print("警告: GML_API_KEY 未设置。智谱文生图功能将不可用。")
         missing_keys.append("GML_API_KEY")
     
+    if not KLING_ACCESS_KEY or not KLING_SECRET_KEY:
+        print("警告: KLING_ACCESS_KEY 或 KLING_SECRET_KEY 未设置。可灵AI功能将不可用。")
+        missing_keys.append("KLING_CREDENTIALS")
+    
     if missing_keys:
-        print(f"缺少以下环境变量: {', '.join(missing_keys)}")
-        if "FAL_API_KEY" in missing_keys:
-            raise ValueError("FAL_API_KEY is not set.")
+        print(f"缺少以下环境变量/配置: {', '.join(missing_keys)}")
+        # 注释掉严格的检查，允许部分功能运行
+        # if "FAL_API_KEY" in missing_keys:
+        #     raise ValueError("FAL_API_KEY is not set.")
 
     port = int(os.environ.get("PORT", 5005))
     print(f"服务启动于端口 {port}...")
