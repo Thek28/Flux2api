@@ -162,16 +162,31 @@ def get_kling_credentials():
 
 def download_and_encode_image(image_url: str) -> str:
     """
-    下载图片并转换为base64格式
+    下载图片并转换为base64格式，或从data URL中提取base64数据
     
     Args:
-        image_url: 图片URL
+        image_url: 图片URL或data URL
         
     Returns:
         base64编码的图片数据
     """
     try:
-        print(f"正在下载图片: {image_url}")
+        print(f"正在处理图片: {image_url[:100]}...")
+        
+        # 检查是否是data URL格式
+        if image_url.startswith('data:'):
+            print("检测到data URL格式，直接提取base64数据")
+            # data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUgAA...
+            if 'base64,' in image_url:
+                # 提取base64部分
+                base64_data = image_url.split('base64,', 1)[1]
+                print(f"从data URL提取base64数据成功，长度: {len(base64_data)}")
+                return base64_data
+            else:
+                raise ValueError("data URL格式不正确，缺少base64数据")
+        
+        # 如果是普通的HTTP/HTTPS URL，则下载图片
+        print("检测到HTTP URL，开始下载图片")
         proxies = get_proxies()
         
         # 下载图片
@@ -190,8 +205,8 @@ def download_and_encode_image(image_url: str) -> str:
         return image_base64
         
     except Exception as e:
-        print(f"下载或转换图片失败: {str(e)}")
-        raise ValueError(f"Failed to download and encode image: {str(e)}")
+        print(f"处理图片失败: {str(e)}")
+        raise ValueError(f"Failed to process image: {str(e)}")
 
 def generate_kling_jwt_token(access_key: str, secret_key: str, exp_seconds: int = 1800) -> str:
     """
