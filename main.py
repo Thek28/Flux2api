@@ -655,6 +655,11 @@ def call_kling_api(prompt, model, options=None):
                 "aspect_ratio": aspect_ratio
             }
             
+            # 为kling-v2文生图设置2k分辨率（图生图时会被覆盖）
+            if model == "kling-v2":
+                payload["resolution"] = "2k"  # v2文生图默认使用2k分辨率
+                print(f"可灵AI v2模型，设置默认resolution字段: 2k")
+            
             # 如果有图片URL，下载并转换为base64，然后添加相关字段（图生图功能）
             if "image_url" in options and options["image_url"]:
                 try:
@@ -670,9 +675,9 @@ def call_kling_api(prompt, model, options=None):
                         print(f"可灵AI v1.5图生图模式，添加image_reference字段: subject")
                         print(f"可灵AI v1.5图生图模式，添加resolution字段: 1k")
                     elif model == "kling-v2":
-                        payload["resolution"] = "1k"  # v2图生图模式必需参数，不需要image_reference
+                        payload["resolution"] = "1k"  # v2图生图模式覆盖为1k分辨率，不需要image_reference
                         print(f"可灵AI v2图生图模式，添加image字段 (base64长度: {len(image_base64)})")
-                        print(f"可灵AI v2图生图模式，添加resolution字段: 1k")
+                        print(f"可灵AI v2图生图模式，覆盖resolution字段为: 1k")
                         print("可灵AI v2图生图模式，不添加image_reference字段")
                 except Exception as e:
                     print(f"处理图片失败: {str(e)}")
