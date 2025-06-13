@@ -615,25 +615,34 @@ def call_kling_api(prompt, model, options=None):
     }
     
     # 将size转换为可灵AI支持的aspect_ratio格式
-    aspect_ratio = "9:16"  # 默认值
+    aspect_ratio = "9:16"  # 可灵模型默认优先使用9:16竖屏比例
     if "size" in options:
         width, height = map(int, options["size"].split("x"))
         
-        # 计算比例并找到最接近的支持比例
+        # 对于可灵模型，优先推荐9:16比例，除非差异过大
         ratio = width / height
-        best_ratio = "9:16"  # 默认
-        min_diff = float('inf')
         
-        for ratio_key, ratio_value in supported_ratios.items():
-            w, h = map(int, ratio_key.split(":"))
-            target_ratio = w / h
-            diff = abs(ratio - target_ratio)
-            if diff < min_diff:
-                min_diff = diff
-                best_ratio = ratio_value
-        
-        aspect_ratio = best_ratio
-        print(f"原始尺寸: {width}x{height}, 转换为可灵AI支持的宽高比: {aspect_ratio}")
+        # 如果比例接近9:16 (0.5625)，直接使用9:16
+        if abs(ratio - 9/16) <= 0.2:  # 容差范围内优先使用9:16
+            aspect_ratio = "9:16"
+            print(f"原始尺寸: {width}x{height}, 比例接近9:16，优化使用: 9:16")
+        else:
+            # 否则计算最接近的支持比例
+            best_ratio = "9:16"  # 默认仍为9:16
+            min_diff = float('inf')
+            
+            for ratio_key, ratio_value in supported_ratios.items():
+                w, h = map(int, ratio_key.split(":"))
+                target_ratio = w / h
+                diff = abs(ratio - target_ratio)
+                if diff < min_diff:
+                    min_diff = diff
+                    best_ratio = ratio_value
+            
+            aspect_ratio = best_ratio
+            print(f"原始尺寸: {width}x{height}, 转换为可灵AI支持的宽高比: {aspect_ratio}")
+    else:
+        print(f"可灵AI模型使用默认宽高比: {aspect_ratio}")
     
     max_retries = 3
     retry_count = 0
@@ -987,7 +996,7 @@ def chat_completions():
     safety_tolerance = "5"
     output_format = "jpeg"
     num_images = 1
-    aspect_ratio = "16:9"
+    aspect_ratio = "9:16"
     
     # 从请求体中提取图生图参数
     if model == "kontext":
@@ -1052,7 +1061,7 @@ def chat_completions():
         if not safety_tolerance:
             safety_tolerance = openai_request.get('safety_tolerance', '2')
         if not aspect_ratio:
-            aspect_ratio = openai_request.get('aspect_ratio', '16:9')
+            aspect_ratio = openai_request.get('aspect_ratio', '9:16')
         if not output_format:
             output_format = openai_request.get('output_format', 'jpeg')
         if not num_images:
