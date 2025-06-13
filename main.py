@@ -1118,7 +1118,7 @@ def chat_completions():
         # 准备选项参数 - 针对不同模型使用不同的默认尺寸
         if model == "kling-v1-5" or model == "kling-v2":
             # 可灵AI使用标准的9:16竖屏比例
-            default_size = "1080x1920"
+            default_size = "720x1280"
         else:
             # 其他模型使用原默认尺寸
             default_size = "1184x880"
@@ -1340,7 +1340,7 @@ def generate_image():
 
     # 提取请求参数 - 针对不同模型使用不同的默认尺寸
     if model == "kling-v1-5" or model == "kling-v2":
-        default_size = "1080x1920"  # 可灵AI使用9:16标准比例
+        default_size = "720x1280"  # 可灵AI使用9:16标准比例
     else:
         default_size = "1080x1920"  # 保持原有默认值
         
