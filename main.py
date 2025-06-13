@@ -8,6 +8,7 @@ import math
 import random
 import jwt  # 添加jwt导入，用于可灵AI认证
 import urllib3  # 添加urllib3导入
+import base64  # 添加base64导入，用于图片编码
 try:
     from zhipuai import ZhipuAI
 except ImportError:
@@ -158,6 +159,39 @@ def get_kling_credentials():
         index = random.randint(0, min(len(KLING_ACCESS_KEY_LIST), len(KLING_SECRET_KEY_LIST)) - 1)
         return KLING_ACCESS_KEY_LIST[index], KLING_SECRET_KEY_LIST[index]
     raise ValueError("KLING_ACCESS_KEY or KLING_SECRET_KEY is not set.")
+
+def download_and_encode_image(image_url: str) -> str:
+    """
+    下载图片并转换为base64格式
+    
+    Args:
+        image_url: 图片URL
+        
+    Returns:
+        base64编码的图片数据
+    """
+    try:
+        print(f"正在下载图片: {image_url}")
+        proxies = get_proxies()
+        
+        # 下载图片
+        response = requests.get(
+            image_url, 
+            proxies=proxies,
+            timeout=30,
+            verify=False
+        )
+        response.raise_for_status()
+        
+        # 转换为base64
+        image_base64 = base64.b64encode(response.content).decode('utf-8')
+        print(f"图片下载并转换为base64成功，长度: {len(image_base64)}")
+        
+        return image_base64
+        
+    except Exception as e:
+        print(f"下载或转换图片失败: {str(e)}")
+        raise ValueError(f"Failed to download and encode image: {str(e)}")
 
 def generate_kling_jwt_token(access_key: str, secret_key: str, exp_seconds: int = 1800) -> str:
     """
@@ -602,13 +636,25 @@ def call_kling_api(prompt, model, options=None):
                 "aspect_ratio": aspect_ratio
             }
             
-            # 如果有图片URL，添加image字段和image_reference字段（图生图功能）
+            # 如果有图片URL，下载并转换为base64，然后添加相关字段（图生图功能）
             if "image_url" in options and options["image_url"]:
-                payload["image"] = options["image_url"]
-                payload["image_reference"] = "subject"  # 图生图模式必需参数
-                payload["resolution"] = "1k"  # 图生图模式必需参数
-                print(f"可灵AI图生图模式，添加image字段: {options['image_url']}")
-                print(f"可灵AI图生图模式，添加image_reference字段: subject")
+                try:
+                    # 下载图片并转换为base64
+                    image_base64 = download_and_encode_image(options["image_url"])
+                    payload["image"] = image_base64
+                    payload["image_reference"] = "subject"  # 图生图模式必需参数
+                    payload["resolution"] = "1k"  # 图生图模式必需参数
+                    print(f"可灵AI图生图模式，添加image字段 (base64长度: {len(image_base64)})")
+                    print(f"可灵AI图生图模式，添加image_reference字段: subject")
+                    print(f"可灵AI图生图模式，添加resolution字段: 1k")
+                except Exception as e:
+                    print(f"处理图片失败: {str(e)}")
+                    if retry_count < max_retries:
+                        retry_count += 1
+                        print(f"图片处理失败，进行重试 ({retry_count}/{max_retries})")
+                        time.sleep(2 ** retry_count)
+                        continue
+                    raise ValueError(f"Failed to process image: {str(e)}")
             
             headers = {
                 'Authorization': f'Bearer {authorization}',
