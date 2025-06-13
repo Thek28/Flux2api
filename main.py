@@ -67,6 +67,10 @@ MODEL_URLS = {
     "kling-v1-5": {
         "provider": "kling",  # 标记为可灵提供商
         "model": "kling-v1-5"  # 可灵模型名称
+    },
+    "kling-v2": {
+        "provider": "kling",  # 标记为可灵提供商
+        "model": "kling-v2"  # 可灵模型名称
     }
 }
 
@@ -657,11 +661,19 @@ def call_kling_api(prompt, model, options=None):
                     # 下载图片并转换为base64
                     image_base64 = download_and_encode_image(options["image_url"])
                     payload["image"] = image_base64
-                    payload["image_reference"] = "subject"  # 图生图模式必需参数
-                    payload["resolution"] = "1k"  # 图生图模式必需参数
-                    print(f"可灵AI图生图模式，添加image字段 (base64长度: {len(image_base64)})")
-                    print(f"可灵AI图生图模式，添加image_reference字段: subject")
-                    print(f"可灵AI图生图模式，添加resolution字段: 1k")
+                    
+                    # 根据模型版本设置不同的参数
+                    if model == "kling-v1-5":
+                        payload["image_reference"] = "subject"  # v1.5图生图模式必需参数
+                        payload["resolution"] = "1k"  # v1.5图生图模式必需参数
+                        print(f"可灵AI v1.5图生图模式，添加image字段 (base64长度: {len(image_base64)})")
+                        print(f"可灵AI v1.5图生图模式，添加image_reference字段: subject")
+                        print(f"可灵AI v1.5图生图模式，添加resolution字段: 1k")
+                    elif model == "kling-v2":
+                        payload["resolution"] = "1k"  # v2图生图模式必需参数，不需要image_reference
+                        print(f"可灵AI v2图生图模式，添加image字段 (base64长度: {len(image_base64)})")
+                        print(f"可灵AI v2图生图模式，添加resolution字段: 1k")
+                        print("可灵AI v2图生图模式，不添加image_reference字段")
                 except Exception as e:
                     print(f"处理图片失败: {str(e)}")
                     if retry_count < max_retries:
@@ -1050,7 +1062,9 @@ def chat_completions():
     if model == "cogview-4-250304":
         print("『执行』: 智谱模型使用原始提示词")
     elif model == "kling-v1-5":
-        print("『执行』: 可灵AI模型使用原始提示词")
+        print("『执行』: 可灵AI v1.5模型使用原始提示词")
+    elif model == "kling-v2":
+        print("『执行』: 可灵AI v2模型使用原始提示词")
     elif model == "kontext":
         # 非智谱模型，使用转换后的提示词
         try:
@@ -1076,7 +1090,7 @@ def chat_completions():
             print(f"『执行』: 提示词转换失败: {str(e)}")
     
     # 检查是否是可灵AI图生图模式
-    is_kling_img2img = model == "kling-v1-5" and image_url_for_kling
+    is_kling_img2img = (model == "kling-v1-5" or model == "kling-v2") and image_url_for_kling
     
     if not prompt and not is_img2img and not is_kling_img2img:
         # 如果没有提示词且不是图生图模式，返回默认响应
@@ -1088,7 +1102,7 @@ def chat_completions():
 
     try:
         # 准备选项参数 - 针对不同模型使用不同的默认尺寸
-        if model == "kling-v1-5":
+        if model == "kling-v1-5" or model == "kling-v2":
             # 可灵AI使用标准的9:16竖屏比例
             default_size = "1080x1920"
         else:
@@ -1103,9 +1117,9 @@ def chat_completions():
         }
         
         # 为可灵AI模型添加图生图参数
-        if model == "kling-v1-5" and image_url_for_kling:
+        if (model == "kling-v1-5" or model == "kling-v2") and image_url_for_kling:
             options["image_url"] = image_url_for_kling
-            print(f"『执行』: 可灵AI图生图模式，使用图片: {image_url_for_kling}")
+            print(f"『执行』: 可灵AI {model} 图生图模式，使用图片: {image_url_for_kling}")
             
         # 为kontext模型添加图生图参数
         if is_img2img:
@@ -1301,7 +1315,7 @@ def generate_image():
     
     # 对于kontext和可灵AI图生图模型，prompt可以为空
     image_url_direct = openai_request.get('image_url', '')  # 直接从请求中获取image_url
-    if not prompt and model not in ["kontext", "kling-v1-5"]:
+    if not prompt and model not in ["kontext", "kling-v1-5", "kling-v2"]:
         return jsonify({
             "error": {
                 "message": "prompt is required",
@@ -1311,7 +1325,7 @@ def generate_image():
         }), 400
 
     # 提取请求参数 - 针对不同模型使用不同的默认尺寸
-    if model == "kling-v1-5":
+    if model == "kling-v1-5" or model == "kling-v2":
         default_size = "1080x1920"  # 可灵AI使用9:16标准比例
     else:
         default_size = "1080x1920"  # 保持原有默认值
@@ -1330,7 +1344,7 @@ def generate_image():
     print("『执行』: 图像生成原始提示词：" + prompt)
     
     # 针对非智谱AI和非可灵AI模型的普通文生图，转换提示词
-    if model not in ["cogview-4-250304", "kling-v1-5"] and (model != "kontext" or not image_url):
+    if model not in ["cogview-4-250304", "kling-v1-5", "kling-v2"] and (model != "kontext" or not image_url):
         try:
             # 尝试转换提示词
             converted_prompt = make_request('sk-OUISlfp3DZsJNRaV89676536131e43A88fBd61A80b7739C6', prompt)
@@ -1343,7 +1357,9 @@ def generate_image():
         if model == "cogview-4-250304":
             print("『执行』: 智谱模型使用原始提示词")
         elif model == "kling-v1-5":
-            print("『执行』: 可灵AI模型使用原始提示词")
+            print("『执行』: 可灵AI v1.5模型使用原始提示词")
+        elif model == "kling-v2":
+            print("『执行』: 可灵AI v2模型使用原始提示词")
         else:
             print(f"『执行』: kontext图生图模式，使用原始提示词，图片URL: {image_url}")
 
@@ -1356,9 +1372,9 @@ def generate_image():
     }
     
     # 为可灵AI模型添加图生图参数
-    if model == "kling-v1-5" and image_url_direct:
+    if (model == "kling-v1-5" or model == "kling-v2") and image_url_direct:
         options["image_url"] = image_url_direct
-        print(f"『执行』: 可灵AI图生图模式（直接端点），使用图片: {image_url_direct}")
+        print(f"『执行』: 可灵AI {model} 图生图模式（直接端点），使用图片: {image_url_direct}")
         
     # 为kontext模型添加图生图参数
     if model == "kontext" and image_url:
@@ -1426,7 +1442,9 @@ def list_models():
         {"id": "cogview-4-250304", "object": "model", "created": 1698785189,
          "owned_by": "zhipuai-adapter", "permission": [], "root": "cogview-4-250304", "parent": None},
         {"id": "kling-v1-5", "object": "model", "created": 1698785189,
-         "owned_by": "kling-adapter", "permission": [], "root": "kling-v1-5", "parent": None}
+         "owned_by": "kling-adapter", "permission": [], "root": "kling-v1-5", "parent": None},
+        {"id": "kling-v2", "object": "model", "created": 1698785189,
+         "owned_by": "kling-adapter", "permission": [], "root": "kling-v2", "parent": None}
     ]
     return jsonify({"object": "list", "data": models})
 
